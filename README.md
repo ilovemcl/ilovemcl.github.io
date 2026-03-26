@@ -153,14 +153,7 @@
 </div>
 
 <script>
-// ─── World setup ──────────────────────────────────────────────────────────────
-//
-// The room is a 12ft × 12ft square.
-// 1 foot = 304.8mm, so 12ft = 3657.6mm — we'll use 3600mm for simplicity.
-// On canvas, the room is 400×400px with a 20px margin on each side (440px canvas).
-//
-// Scale: 400px = 3600mm → 1px = 9mm
-
+// map set up
 const ROOM_MM      = 3600;  // Room is 3600mm × 3600mm (≈ 12ft × 12ft = 144in × 144in)
 const CANVAS_SIZE  = 440;
 const MARGIN_PX    = 20;
@@ -184,7 +177,6 @@ const WALL = {
   bottom: MARGIN_PX + ROOM_PX,
 };
 
-// ─── Constants ────────────────────────────────────────────────────────────────
 const NUM_PARTICLES  = 500;
 const MOTION_NOISE   = 0.3;   // Position noise on particle movement (px)
 const RESAMPLE_NOISE = 0.6;   // Jitter added on resample (px)
@@ -208,8 +200,6 @@ const BEAM_LABELS  = ["F", "R", "B", "L"];
 const BEAM_COLORS  = ["#38bdf8", "#a78bfa", "#fb923c", "#34d399"];
 const BEAM_IDS     = ["b-f", "b-r", "b-b", "b-l"];
 
-// ─── Math helpers ─────────────────────────────────────────────────────────────
-
 function gauss(mean, std) {
   let u = 0, v = 0;
   while (!u) u = Math.random();
@@ -228,7 +218,6 @@ function hexAlpha(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-// ─── Objects (5 axis-aligned 0.5ft × 0.5ft boxes) ────────────────────────────
 // Each object: { x, y, w, h } in pixel coords (top-left corner)
 // 0.5 ft = 6 inches = 152.4 mm
 const OBJ_MM   = 152.4;           // 0.5 ft in mm
@@ -266,8 +255,6 @@ function insideAnyObject(px, py, pad=0) {
   );
 }
 
-// ─── Wall + object ray casting ────────────────────────────────────────────────
-//
 // rayIntersectRect: returns { enter, exit } t-values for a ray vs AABB, or null if no hit.
 // enter = distance to front face, exit = distance to back face.
 //
@@ -302,160 +289,123 @@ function rayToWall(rx, ry, angle) {
   return hit ? hit.exit : Infinity;
 }
 
-// rayToObjectAndWall: returns { objDist, wallDist } both in pixels.
-// objDist = distance to nearest object face (null if no object intersected within range)
+// rayToObjectAndWall: returns { objDist, objIdx, wallDist } all in pixels.
+// objDist = distance to nearest object face (null if none intersected within range)
+// objIdx  = index into fieldObjects of the object that was hit (-1 if none)
 // wallDist = distance to the room wall (always computed, ray passes through objects)
 function rayToObjectAndWall(rx, ry, angle) {
   const cos = Math.cos(angle), sin = Math.sin(angle);
 
   // Wall distance — exit of room AABB
-  const wallHit = rayIntersectRect(rx, ry, cos, sin, WALL.left, WALL.top, WALL.right, WALL.bottom);
+  const wallHit  = rayIntersectRect(rx, ry, cos, sin, WALL.left, WALL.top, WALL.right, WALL.bottom);
   const wallDist = wallHit ? wallHit.exit : Infinity;
 
-  // Object distance — nearest enter face of any object box
-  let objDist = null;
-  for (const o of fieldObjects) {
+  // Object distance — nearest enter face, tracking which object
+  let objDist = null, objIdx = -1;
+  for (let i = 0; i < fieldObjects.length; i++) {
+    const o      = fieldObjects[i];
     const inside = (rx > o.x && rx < o.x+o.w && ry > o.y && ry < o.y+o.h);
     if (inside) continue;
     const hit = rayIntersectRect(rx, ry, cos, sin, o.x, o.y, o.x+o.w, o.y+o.h);
     if (!hit) continue;
-    // Only count if the object face is closer than the wall
-    if (hit.enter < wallDist) {
-      if (objDist === null || hit.enter < objDist) objDist = hit.enter;
+    if (hit.enter < wallDist && (objDist === null || hit.enter < objDist)) {
+      objDist = hit.enter;
+      objIdx  = i;
     }
   }
 
-  return { objDist, wallDist };
+  return { objDist, objIdx, wallDist };
 }
 
-// ─── Per-object particle filters ─────────────────────────────────────────────
-// Each object gets its own independent particle filter that localises the object
-// purely from the beam object-distance readings. These are SEPARATE from the
-// robot's particles and converge on each object's true position.
+// Each object i has its own particle cloud that localises object i's position
+
+// Each beam hit gives a direct observation of the object centre:
+//   face_hit = robot_pos + measuredDist * beamDir
+//   centre   = face_hit + (OBJ_PX/2) * beamDir   (step inside by half-width)
 //
-// Representation: objParticles[i] = array of { x, y, w } for object i.
-// These particles represent hypotheses about WHERE object i is in the room.
 
-const N_OBJ_PARTICLES  = 300;  // more particles → better coverage
-const OBJ_RESAMP_NOISE = 0.8;  // tighter jitter so cluster doesn't diffuse
+const N_OBJ_SAMPLES  = 80;   // visual uncertainty cloud sample count
+const OBJ_INIT_STD   = 60;   // initial position uncertainty (px) — wide spread
+const OBJ_OBS_NOISE  = 2.5;  // observation noise std (px) — how much we trust each hit
+const OBJ_DRIFT      = 0.0;  // objects don't move, so process noise = 0
 
-let objParticles  = [];
-let objEstimates  = [];
-let objHistory    = [];  // objHistory[i] = array of recent error values
+let objEstimates = [];  // { x, y, varX, varY } per object — Kalman state
+let objSamples   = [];  // visual cloud: array of {x,y} per object
+let objHistory   = [];
+let objSeenCount = [];  // how many observations fused per object
 
 function initObjParticles() {
-  objParticles = fieldObjects.map(() => {
-    const arr = [];
-    for (let i = 0; i < N_OBJ_PARTICLES; i++) {
-      arr.push({
-        x: WALL.left + Math.random() * ROOM_PX,
-        y: WALL.top  + Math.random() * ROOM_PX,
-        w: 1 / N_OBJ_PARTICLES,
-      });
-    }
-    return arr;
-  });
-  objEstimates = fieldObjects.map(o => ({ x: o.x + o.w/2, y: o.y + o.h/2 }));
+  // Start with wide uniform uncertainty centred on room centre
+  const cx = WALL.left + ROOM_PX / 2;
+  const cy = WALL.top  + ROOM_PX / 2;
+  objEstimates = fieldObjects.map(() => ({
+    x: cx, y: cy,
+    varX: OBJ_INIT_STD * OBJ_INIT_STD,
+    varY: OBJ_INIT_STD * OBJ_INIT_STD,
+  }));
+  objSamples   = fieldObjects.map(() => _sampleCloud(cx, cy, OBJ_INIT_STD, OBJ_INIT_STD));
   objHistory   = fieldObjects.map(() => []);
+  objSeenCount = fieldObjects.map(() => 0);
 }
 
-// For a given object particle at (px,py) — treated as the centre of a 0.5ft box —
-// cast a ray from the robot and return the predicted entry distance in inches,
-// or null if the ray misses the box.
-function predictObjDist(robotX, robotY, beamDir, px, py) {
-  const half = OBJ_PX / 2;
-  const left = px - half, right = px + half;
-  const top  = py - half, bottom = py + half;
-  const cos  = Math.cos(beamDir), sin = Math.sin(beamDir);
-  const hit  = rayIntersectRect(robotX, robotY, cos, sin, left, top, right, bottom);
-  if (!hit || hit.enter < 0.5) return null; // miss or origin inside box
-  return pxToIn(hit.enter);
+function _sampleCloud(mx, my, stdX, stdY) {
+  const out = [];
+  for (let i = 0; i < N_OBJ_SAMPLES; i++) {
+    out.push({
+      x: clamp(gauss(mx, stdX), WALL.left, WALL.right),
+      y: clamp(gauss(my, stdY), WALL.top,  WALL.bottom),
+    });
+  }
+  return out;
 }
 
 function updateObjParticles() {
-  // Collect all beams with an object reading this step
-  const objBeams = [];
+  // For each beam that hit an object, compute the direct geometric observation
+  // of that object's centre and fuse it into the object's Kalman estimate.
+  const obsNoiseSq = OBJ_OBS_NOISE * OBJ_OBS_NOISE;
+
   BEAM_OFFSETS.forEach((offset, b) => {
-    if (beamReadings[b].obj !== null) {
-      objBeams.push({ dir: robot.theta + offset, measIn: beamReadings[b].obj });
-    }
+    const idx = beamObjIdx[b];
+    if (idx < 0 || beamReadings[b].obj === null) return; // no hit this beam
+
+    const beamDir  = robot.theta + offset;
+    const distPx   = mmToPx(inToMm(beamReadings[b].obj));  // measured dist in px
+
+    // The beam hit the FACE of the object. Step inward by half the object width
+    // to get the estimated object CENTRE.
+    const facX = robot.x + distPx * Math.cos(beamDir);
+    const facY = robot.y + distPx * Math.sin(beamDir);
+    const obsX = facX + (OBJ_PX / 2) * Math.cos(beamDir);
+    const obsY = facY + (OBJ_PX / 2) * Math.sin(beamDir);
+
+    // 1-D Kalman update independently on x and y
+    const est = objEstimates[idx];
+
+    // Kalman gain  K = var / (var + R)
+    const Kx = est.varX / (est.varX + obsNoiseSq);
+    const Ky = est.varY / (est.varY + obsNoiseSq);
+
+    est.x    += Kx * (obsX - est.x);
+    est.y    += Ky * (obsY - est.y);
+    est.varX  = (1 - Kx) * est.varX;
+    est.varY  = (1 - Ky) * est.varY;
+
+    objSeenCount[idx]++;
   });
 
-  const sigSq = SENSOR_NOISE_IN * SENSOR_NOISE_IN;
-
-  objParticles = objParticles.map((parts, oi) => {
-    if (objBeams.length === 0) return parts; // nothing to update
-
-    let total = 0;
-
-    const scored = parts.map(p => {
-      let logW = 0;
-      let hits = 0;
-
-      for (const beam of objBeams) {
-        // Proper ray-vs-box: predict what distance the sensor would read
-        // if this particle were the true object.
-        const predIn = predictObjDist(robot.x, robot.y, beam.dir, p.x, p.y);
-
-        if (predIn !== null) {
-          // Ray hits the hypothetical box — score the distance match
-          logW += -((predIn - beam.measIn) ** 2) / (2 * sigSq);
-          hits++;
-        } else {
-          // This particle position doesn't intercept the beam at all — big penalty
-          logW += -8.0;
-        }
-      }
-
-      // If multiple beams fired and none hit this particle, penalise further
-      if (hits === 0 && objBeams.length > 1) logW += -4.0;
-
-      const w = Math.exp(logW);
-      total += w;
-      return { ...p, w };
-    });
-
-    const norm = total || 1;
-    return scored.map(p => ({ ...p, w: p.w / norm }));
+  // Rebuild visual uncertainty clouds from current estimates
+  objSamples = objEstimates.map(est => {
+    const stdX = Math.sqrt(Math.max(est.varX, 0.1));
+    const stdY = Math.sqrt(Math.max(est.varY, 0.1));
+    return _sampleCloud(est.x, est.y, stdX, stdY);
   });
 
-  // Low-variance systematic resample + adaptive jitter
-  objParticles = objParticles.map((parts, oi) => {
-    // Compute effective sample size to decide jitter magnitude
-    const sumSq = parts.reduce((s, p) => s + p.w * p.w, 0);
-    const ess   = 1 / (sumSq * N_OBJ_PARTICLES || 1); // 0–1
-    const jitter = OBJ_RESAMP_NOISE * (0.3 + 0.7 * ess); // tighter when converged
-
-    const next = [];
-    const step = 1 / N_OBJ_PARTICLES;
-    let u = Math.random() * step, cum = 0, j = 0;
-    for (let i = 0; i < N_OBJ_PARTICLES; i++, u += step) {
-      while (cum < u && j < parts.length - 1) { cum += parts[j].w; j++; }
-      const chosen = parts[j];
-      next.push({
-        x: clamp(chosen.x + gauss(0, jitter), WALL.left, WALL.right),
-        y: clamp(chosen.y + gauss(0, jitter), WALL.top,  WALL.bottom),
-        w: 1 / N_OBJ_PARTICLES,
-      });
-    }
-    return next;
-  });
-
-  // Weighted mean estimate
-  objEstimates = objParticles.map(parts => {
-    // Use top-weighted particles for a more robust estimate
-    const sorted = [...parts].sort((a,b) => b.w - a.w);
-    const top    = sorted.slice(0, Math.ceil(N_OBJ_PARTICLES * 0.2));
-    const wSum   = top.reduce((s,p) => s + p.w, 0) || 1;
-    let sx = 0, sy = 0;
-    top.forEach(p => { sx += p.x * p.w; sy += p.y * p.w; });
-    return { x: sx / wSum, y: sy / wSum };
-  });
-
-  // Track accuracy history per object
+  // Track accuracy history
   fieldObjects.forEach((o, i) => {
-    const ocx = o.x + o.w/2, ocy = o.y + o.h/2;
-    const err = pxToIn(Math.hypot(objEstimates[i].x - ocx, objEstimates[i].y - ocy));
+    const err = pxToIn(Math.hypot(
+      objEstimates[i].x - (o.x + o.w / 2),
+      objEstimates[i].y - (o.y + o.h / 2)
+    ));
     objHistory[i] = [...(objHistory[i] || []).slice(-40), err];
   });
 }
@@ -468,8 +418,6 @@ function computeObjAccuracy() {
     return { errorIn: pxToIn(Math.hypot(est.x - ocx, est.y - ocy)) };
   });
 }
-
-// ─── Simulation state ─────────────────────────────────────────────────────────
 let particles  = [];
 let robot      = { x: WALL.left + ROOM_PX/2, y: WALL.top + ROOM_PX/2, theta: 0 };
 let estimate   = { x: robot.x, y: robot.y };
@@ -480,10 +428,9 @@ let history    = [];
 let robotHistory = [];  // best error seen so far, running avg, convergence step
 let beamReadings = [{obj:null,wall:null},{obj:null,wall:null},{obj:null,wall:null},{obj:null,wall:null}];
 
-// ─── Phase 1: Initialize particles ───────────────────────────────────────────
 // Scatter particles uniformly in the room.
-// With a gyro, we initialise all particles to the robot's known heading + tiny drift.
-// This eliminates rotational ambiguity from the very start.
+// With a gyro, we initialise all particles to the robot's known heading + tiny drift
+// This eliminates rotational ambiguity from the very start
 function initParticles() {
   particles = [];
   let attempts = 0;
@@ -509,16 +456,16 @@ function initParticles() {
   }
 }
 
-// ─── Phase 2: Sense — dual measurement per beam ───────────────────────────────
 // Each beam returns { obj, wall }:
 //   obj  = distance to nearest object face in inches (null if none in range)
 //   wall = distance to room wall in inches (null if out of sensor range)
-// Both measurements are noisy. The wall reading always shoots through objects.
+// Also populates beamObjIdx[b] with the index of whichever object was hit (-1 if none).
 function senseBeams(rx, ry, theta) {
   const rangePx = sensorRangePx();
-  return BEAM_OFFSETS.map(offset => {
+  beamObjIdx = [-1, -1, -1, -1]; // reset attribution
+  return BEAM_OFFSETS.map((offset, b) => {
     const beamDir = theta + offset;
-    const { objDist, wallDist } = rayToObjectAndWall(rx, ry, beamDir);
+    const { objDist, objIdx, wallDist } = rayToObjectAndWall(rx, ry, beamDir);
 
     const wallIn = wallDist <= rangePx
       ? pxToIn(wallDist) + gauss(0, SENSOR_NOISE_IN)
@@ -528,11 +475,12 @@ function senseBeams(rx, ry, theta) {
       ? pxToIn(objDist) + gauss(0, SENSOR_NOISE_IN)
       : null;
 
+    if (objIn !== null) beamObjIdx[b] = objIdx; // record which object this beam hit
+
     return { obj: objIn, wall: wallIn };
   });
 }
 
-// ─── Phase 3: Move robot ──────────────────────────────────────────────────────
 function moveRobot(fwdPx, turn) {
   robot.theta += turn;
   const nx = clamp(robot.x + fwdPx * Math.cos(robot.theta), WALL.left + 8,  WALL.right  - 8);
@@ -543,9 +491,8 @@ function moveRobot(fwdPx, turn) {
   }
 }
 
-// ─── Phase 3: Move particles (gyro-assisted) ─────────────────────────────────
 // With a gyro, each particle's heading is set to the robot's measured heading
-// plus a small gyro drift noise — NOT a free random walk.
+// plus a small gyro drift noise 
 // This keeps all particles rotationally aligned, eliminating the biggest source
 // of divergence in a symmetric room.
 function moveParticles(fwdPx, turn) {
@@ -560,7 +507,6 @@ function moveParticles(fwdPx, turn) {
   });
 }
 
-// ─── Phase 4: Update weights ──────────────────────────────────────────────────
 // Each beam provides up to 2 measurements: object distance and wall distance.
 // Each particle predicts both using its own ray cast, scored via Gaussian log-likelihood.
 // More valid measurements = stronger weight signal = faster convergence.
@@ -616,7 +562,6 @@ function updateWeights(measurement) {
   return seenCount;
 }
 
-// ─── Phase 5: Resample with jitter ───────────────────────────────────────────
 function resample() {
   const next = [];
   for (let i = 0; i < NUM_PARTICLES; i++) {
@@ -637,7 +582,6 @@ function resample() {
   particles = next;
 }
 
-// ─── Estimate + convergence ───────────────────────────────────────────────────
 function estimatePos() {
   let x=0, y=0;
   particles.forEach(p => { x+=p.x; y+=p.y; });
@@ -653,7 +597,6 @@ function particleSpread() {
   return Math.sqrt(v/NUM_PARTICLES);
 }
 
-// ─── Full MCL step ────────────────────────────────────────────────────────────
 function runStep(fwdPx, turn) {
   moveRobot(fwdPx, turn);
   beamReadings = senseBeams(robot.x, robot.y, robot.theta);
@@ -693,7 +636,7 @@ function updateObjAccuracyUI() {
   }).join("");
 }
 
-// ─── UI ───────────────────────────────────────────────────────────────────────
+//ui
 function updateUI(seen) {
   document.getElementById("s-step").textContent    = stepCount;
   document.getElementById("s-error").textContent   = errorVal.toFixed(2) + " in";
@@ -717,8 +660,7 @@ function updateUI(seen) {
       el.textContent = wallStr + objStr;
     }
   });
-
-  // ── Robot accuracy tracker ──────────────────────────────────────────────────
+//accuracy
   if (robotHistory.length > 0) {
     const best    = Math.min(...robotHistory);
     const recent  = robotHistory.slice(-20);
@@ -752,7 +694,6 @@ function drawChart() {
     <circle cx="182" cy="${55-(last/maxE)*50}" r="3" fill="#38bdf8"/>`;
 }
 
-// ─── Canvas drawing ───────────────────────────────────────────────────────────
 const canvas = document.getElementById("canvas");
 const ctx    = canvas.getContext("2d");
 
@@ -763,8 +704,6 @@ function draw() {
   ctx.fillStyle = "#0a0e1a";
   ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-  // ── Room walls ──────────────────────────────────────────────────────────────
-  // Draw the 12ft × 12ft square room
   ctx.strokeStyle = "#475569";
   ctx.lineWidth   = 3;
   ctx.strokeRect(WALL.left, WALL.top, ROOM_PX, ROOM_PX);
@@ -796,7 +735,6 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(WALL.left, y);   ctx.lineTo(WALL.right, y);  ctx.stroke();
   }
 
-  // ── Field objects ──────────────────────────────────────────────────────────
   fieldObjects.forEach((o, i) => {
     const color = OBJ_COLORS[i];
     // Fill
@@ -822,41 +760,47 @@ function draw() {
     }
   });
 
-  // ── Particles ──────────────────────────────────────────────────────────────
   particles.forEach(p => {
     const alpha = Math.min(1, p.w * NUM_PARTICLES * 2);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(200,210,230,${0.08 + alpha * 0.6})`;
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(200,220,255,${0.25 + alpha * 0.75})`;
     ctx.fill();
   });
 
-  // ── Object particles + estimates ───────────────────────────────────────────
-  // Draw each object's dedicated particle cloud (small colored squares)
-  // and its estimated centre (colored ring matching the object color).
-  objParticles.forEach((parts, i) => {
+  // objSamples[i] = Gaussian cloud drawn around the Kalman estimate for object i.
+  // Tight cloud = confident; wide cloud = uncertain (few observations so far).
+  objSamples.forEach((samples, i) => {
     const color = OBJ_COLORS[i];
-    parts.forEach(p => {
+    samples.forEach(s => {
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
-      ctx.fillStyle = hexAlpha(color, 0.25);
+      ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = hexAlpha(color, 0.55);
       ctx.fill();
     });
 
-    // Estimated object position — ring
+    // Estimated object position — ring + dot
     const est = objEstimates[i];
     ctx.beginPath();
     ctx.arc(est.x, est.y, 7, 0, Math.PI * 2);
-    ctx.strokeStyle = hexAlpha(color, 0.9);
+    ctx.strokeStyle = hexAlpha(color, 0.95);
     ctx.lineWidth   = 2;
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(est.x, est.y, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = hexAlpha(color, 0.9);
+    ctx.fillStyle = hexAlpha(color, 0.95);
     ctx.fill();
+
+    // Observation count badge
+    if (objSeenCount[i] > 0) {
+      ctx.font      = "8px 'Courier New'";
+      ctx.fillStyle = hexAlpha(color, 0.7);
+      ctx.textAlign = "center";
+      ctx.fillText("n=" + objSeenCount[i], est.x, est.y - 11);
+      ctx.textAlign = "left";
+    }
   });
 
-  // ── Sensor beams ───────────────────────────────────────────────────────────
   // Each beam now passes THROUGH objects to the wall.
   // The cone extends to the wall. Object hits are shown as separate diamonds on the ray.
   const halfAngle   = BEAM_WIDTH_DEG * Math.PI / 180;
