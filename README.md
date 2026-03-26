@@ -52,7 +52,7 @@
 <body>
 
 <div class="subtitle">Monte Carlo Localization — 4-Beam Pass-Through Sensors (Wall + Object)</div>
-<h1>886E — Particle Filter Simulator</h1>
+<h1>Monte Carlo Localization</h1>
 
 <div class="layout">
   <div class="canvas-wrap">
