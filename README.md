@@ -52,7 +52,7 @@
 <body>
 
 <div class="subtitle">Monte Carlo Localization — 4-Beam Pass-Through Sensors (Wall + Object)</div>
-<h1>Monte Carlo Localization</h1>
+<h1>Monte Carlo Localization 10</h1>
 
 <div class="layout">
   <div class="canvas-wrap">
@@ -141,14 +141,6 @@
       <div style="margin-top:8px;font-size:10px;color:#475569;">Particle cluster vs true object center</div>
     </div>
 
-    <div class="panel">
-      <div class="panel-title">MCL PHASES</div>
-      <div class="phase"><div class="phase-num">1</div><div><div class="phase-name">Init</div><div class="phase-desc">Scatter particles in room</div></div></div>
-      <div class="phase"><div class="phase-num">2</div><div><div class="phase-name">Sense</div><div class="phase-desc">Beams → wall dist + ◆obj dist</div></div></div>
-      <div class="phase"><div class="phase-num">3</div><div><div class="phase-name">Predict</div><div class="phase-desc">Move particles + noise</div></div></div>
-      <div class="phase"><div class="phase-num">4</div><div><div class="phase-name">Weight</div><div class="phase-desc">Score wall + obj dist matches</div></div></div>
-      <div class="phase"><div class="phase-num">5</div><div><div class="phase-name">Resample</div><div class="phase-desc">Survive or die by weight</div></div></div>
-    </div>
   </div>
 </div>
 
