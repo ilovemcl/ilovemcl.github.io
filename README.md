@@ -169,7 +169,7 @@ const WALL = {
   bottom: MARGIN_PX + ROOM_PX,
 };
 
-const NUM_PARTICLES  = 10;
+const NUM_PARTICLES  = 50;
 const MOTION_NOISE   = 0.3;   // Position noise on particle movement (px)
 const RESAMPLE_NOISE = 0.6;   // Jitter added on resample (px)
 
