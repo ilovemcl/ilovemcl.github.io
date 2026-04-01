@@ -52,7 +52,7 @@
 <body>
 
 <div class="subtitle">Monte Carlo Localization — 4-Beam Pass-Through Sensors (Wall + Object)</div>
-<h1>Monte Carlo Localization 500</h1>
+<h1>Monte Carlo Localization 1000</h1>
 
 <div class="layout">
   <div class="canvas-wrap">
@@ -83,7 +83,7 @@
       <div class="stat-row"><span class="stat-label">Heading (gyro)</span><span class="stat-val" id="s-heading">0.0°</span></div>
       <div class="stat-row"><span class="stat-label">Robot X</span><span class="stat-val" id="s-rx">—</span></div>
       <div class="stat-row"><span class="stat-label">Robot Y</span><span class="stat-val" id="s-ry">—</span></div>
-      <div class="stat-row"><span class="stat-label">Particles</span><span class="stat-val">500</span></div>
+      <div class="stat-row"><span class="stat-label">Particles</span><span class="stat-val">1000</span></div>
     </div>
 
     <div class="panel">
@@ -169,7 +169,7 @@ const WALL = {
   bottom: MARGIN_PX + ROOM_PX,
 };
 
-const NUM_PARTICLES  = 500;
+const NUM_PARTICLES  = 1000;
 const MOTION_NOISE   = 0.3;   // Position noise on particle movement (px)
 const RESAMPLE_NOISE = 0.6;   // Jitter added on resample (px)
 
@@ -316,7 +316,7 @@ function rayToObjectAndWall(rx, ry, angle) {
 //   centre   = face_hit + (OBJ_PX/2) * beamDir   (step inside by half-width)
 //
 
-const N_OBJ_SAMPLES  = 500;   // visual uncertainty cloud sample count
+const N_OBJ_SAMPLES  = 1000;   // visual uncertainty cloud sample count
 const OBJ_INIT_STD   = 60;   // initial position uncertainty (px) — wide spread
 const OBJ_OBS_NOISE  = 2.5;  // observation noise std (px) — how much we trust each hit
 const OBJ_DRIFT      = 0.0;  // objects don't move, so process noise = 0
