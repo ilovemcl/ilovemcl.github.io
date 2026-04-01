@@ -52,7 +52,7 @@
 <body>
 
 <div class="subtitle">Monte Carlo Localization — 4-Beam Pass-Through Sensors (Wall + Object)</div>
-<h1>Monte Carlo Localization 50</h1>
+<h1>Monte Carlo Localization 55</h1>
 
 <div class="layout">
   <div class="canvas-wrap">
@@ -316,7 +316,7 @@ function rayToObjectAndWall(rx, ry, angle) {
 //   centre   = face_hit + (OBJ_PX/2) * beamDir   (step inside by half-width)
 //
 
-const N_OBJ_SAMPLES  = NUM_PARTICLES;   // visual uncertainty cloud sample count
+const N_OBJ_SAMPLES  = 50;   // visual uncertainty cloud sample count
 const OBJ_INIT_STD   = 60;   // initial position uncertainty (px) — wide spread
 const OBJ_OBS_NOISE  = 2.5;  // observation noise std (px) — how much we trust each hit
 const OBJ_DRIFT      = 0.0;  // objects don't move, so process noise = 0
