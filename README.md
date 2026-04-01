@@ -83,7 +83,7 @@
       <div class="stat-row"><span class="stat-label">Heading (gyro)</span><span class="stat-val" id="s-heading">0.0°</span></div>
       <div class="stat-row"><span class="stat-label">Robot X</span><span class="stat-val" id="s-rx">—</span></div>
       <div class="stat-row"><span class="stat-label">Robot Y</span><span class="stat-val" id="s-ry">—</span></div>
-      <div class="stat-row"><span class="stat-label">Particles</span><span class="stat-val">50</span></div>
+      <div class="stat-row"><span class="stat-label">Particles</span><span class="stat-val">100</span></div>
     </div>
 
     <div class="panel">
