@@ -52,7 +52,7 @@
 <body>
 
 <div class="subtitle">Monte Carlo Localization — 4-Beam Pass-Through Sensors (Wall + Object)</div>
-<h1>Monte Carlo Localization 5000</h1>
+<h1>Monte Carlo Localization</h1>
 
 <div class="layout">
   <div class="canvas-wrap">
@@ -83,7 +83,7 @@
       <div class="stat-row"><span class="stat-label">Heading (gyro)</span><span class="stat-val" id="s-heading">0.0°</span></div>
       <div class="stat-row"><span class="stat-label">Robot X</span><span class="stat-val" id="s-rx">—</span></div>
       <div class="stat-row"><span class="stat-label">Robot Y</span><span class="stat-val" id="s-ry">—</span></div>
-      <div class="stat-row"><span class="stat-label">Particles</span><span class="stat-val">5000</span></div>
+      <div class="stat-row"><span class="stat-label">Particles</span><span class="stat-val">500</span></div>
     </div>
 
     <div class="panel">
@@ -169,7 +169,7 @@ const WALL = {
   bottom: MARGIN_PX + ROOM_PX,
 };
 
-const NUM_PARTICLES  = 5000;
+const NUM_PARTICLES  = 500;
 const MOTION_NOISE   = 0.3;   // Position noise on particle movement (px)
 const RESAMPLE_NOISE = 0.6;   // Jitter added on resample (px)
 
